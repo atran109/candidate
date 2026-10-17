@@ -34,6 +34,9 @@ AGENT_MODEL = os.getenv("AGENT_MODEL", "gpt-4.1")
 # "routed" (default) or "all" (baseline: every tool schema on every call).
 ROUTING_MODE = os.getenv("ROUTING_MODE", "routed")
 
+# Hold the first write of each request for a self-check (ambiguity guard).
+WRITE_GATE = os.getenv("WRITE_GATE", "1") != "0"
+
 MAX_ITERATIONS = 8
 MAX_ROUTED_TOOLS = 12
 TOOL_OUTPUT_CHAR_LIMIT = 8000

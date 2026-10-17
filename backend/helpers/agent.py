@@ -12,12 +12,23 @@ from openai import OpenAI, OpenAIError
 from backend.chat_schema import ChatMessage, ToolCallLog
 
 from . import router, tools
-from .config import AGENT_MODEL, MAX_ITERATIONS, ROUTING_MODE
+from .config import AGENT_MODEL, MAX_ITERATIONS, ROUTING_MODE, WRITE_GATE
 from .prompts import agent_instructions
 
 log = logging.getLogger("chat.agent")
 
 _client: OpenAI | None = None
+
+WRITE_GATE_MESSAGE = (
+    "[Write check — not executed yet.] Before changing anything, verify: "
+    "(1) every target, recipient, and value comes from the user's words or a "
+    "tool result (nothing invented); (2) if the user referred to something "
+    "unspecified (\"the project\", \"the meeting\") or several items matched, "
+    "the user chose which one — you didn't pick. If both hold (the usual case "
+    "for an explicit request), immediately call the same tool again with the "
+    "same arguments — do not reply with text first. Only if one fails: don't "
+    "write; ask the user one concise question instead."
+)
 
 
 def _openai() -> OpenAI:
@@ -99,7 +110,9 @@ def _run(messages: list[ChatMessage], call_log: list[ToolCallLog]) -> str:
         return resp
 
     reply = ""
+    gate_passed = not WRITE_GATE
     for iteration in range(MAX_ITERATIONS):
+        held_writes = False
         resp = create()
         calls = [o for o in resp.output if o.type == "function_call"]
         if not calls:
@@ -127,7 +140,15 @@ def _run(messages: list[ChatMessage], call_log: list[ToolCallLog]) -> str:
             if key in seen:
                 outputs[c.call_id] = seen[key]
                 continue
+            if not gate_passed and not tools.is_read_only(c.name):
+                # Hold the first write of the request for a self-check (not
+                # executed, so not logged). Same call re-issued ⇒ it runs.
+                outputs[c.call_id] = WRITE_GATE_MESSAGE
+                held_writes = True
+                continue
             to_run.append((c.call_id, c.name, args))
+        if held_writes:
+            gate_passed = True
 
         results = tools.execute_batch([(name, args) for _, name, args in to_run])
         for (call_id, name, args), entry in zip(to_run, results):

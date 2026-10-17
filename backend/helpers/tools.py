@@ -19,21 +19,21 @@ from .config import TOOL_OUTPUT_CHAR_LIMIT
 
 log = logging.getLogger("chat.tools")
 
-# Name fragments that mark a tool as read-only. Read-only batches run in
-# parallel; anything that may write runs sequentially so mock-state ID
-# counters can't race.
-_READ_MARKERS = (
+# Whole-word verbs in tool names (split on "_"). Read-only batches run in
+# parallel and skip the write gate; anything else is treated as a write
+# (conservative: unknown ⇒ write).
+_READ_WORDS = {
     "list", "get", "fetch", "find", "search", "read", "query", "status",
-    "health", "info", "history", "conversation", "thread", "download",
-    "instances", "free_slots", "free_busy",
-)
-_WRITE_MARKERS = (
+    "health", "info", "history", "conversation", "conversations", "thread",
+    "download", "instances", "free", "busy",
+}
+_WRITE_WORDS = {
     "create", "update", "delete", "send", "write", "reply", "patch", "move",
     "add", "remove", "trash", "merge", "insert", "clear", "empty", "edit",
-    "star", "fork", "push", "trigger", "dismiss", "mark", "assign", "label",
-    "modify", "copy", "duplicate", "watch", "triage", "request", "manage",
-    "run_", "share", "generate",
-)
+    "star", "unstar", "fork", "push", "trigger", "dismiss", "mark", "assign",
+    "modify", "copy", "duplicate", "watch", "triage", "manage", "run",
+    "share", "generate", "respond", "label", "sync", "quick", "spam",
+}
 
 
 @lru_cache(maxsize=1)
@@ -50,10 +50,11 @@ def openai_schemas(names: list[str]) -> list[dict[str, Any]]:
 
 
 def is_read_only(name: str) -> bool:
-    lowered = name.lower()
-    if any(marker in lowered for marker in _WRITE_MARKERS):
-        return False
-    return any(marker in lowered for marker in _READ_MARKERS)
+    words = set(name.lower().split("_"))
+    # "label"/"labels" as a noun in list/get tools is still a read.
+    if words & {"list", "get"} and not words & (_WRITE_WORDS - {"label"}):
+        return True
+    return bool(words & _READ_WORDS) and not words & _WRITE_WORDS
 
 
 def _strip_nulls(args: dict[str, Any]) -> dict[str, Any]:
