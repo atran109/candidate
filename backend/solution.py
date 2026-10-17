@@ -1,18 +1,22 @@
 from __future__ import annotations
 
-from backend.chat_schema import ChatRequest, ChatResponse
-from fastapi import HTTPException
+import logging
+
+from backend.chat_schema import ChatMessage, ChatRequest, ChatResponse
+from backend.helpers.agent import run_chat
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
+)
+# Keep our own logs readable; the OpenAI/httpx clients are chatty at INFO.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def chat(request: ChatRequest) -> ChatResponse:
-    """Stub endpoint. Implement this.
-
-    Accept the conversation in `request.messages`, decide which (if any)
-    of the registered tools to call, run them, and return the final
-    assistant turn appended to `messages`. Populate `tool_calls` with an
-    ordered log of every tool invocation made during this turn so the
-    reviewer can see how the system reasoned.
-
-    See README.md for the full task description and scenarios.
-    """
-    raise HTTPException(status_code=501, detail="POST /chat is not implemented yet.")
+    """Route the latest request to a small tool subset, run the tool loop,
+    and return the assistant reply plus an ordered log of every tool call."""
+    reply, tool_calls = run_chat(request.messages)
+    return ChatResponse(
+        messages=[*request.messages, ChatMessage(role="assistant", content=reply)],
+        tool_calls=tool_calls,
+    )
