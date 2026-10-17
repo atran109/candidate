@@ -7,7 +7,7 @@ import logging
 import time
 from typing import Any
 
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 
 from backend.chat_schema import ChatMessage, ToolCallLog
 
@@ -47,6 +47,21 @@ def _call_key(name: str, args: dict[str, Any]) -> str:
 
 
 def run_chat(messages: list[ChatMessage]) -> tuple[str, list[ToolCallLog]]:
+    """Never raises for LLM failures: returns an honest reply plus whatever
+    tool calls already ran, so the log stays complete."""
+    call_log: list[ToolCallLog] = []
+    try:
+        reply = _run(messages, call_log)
+    except OpenAIError:
+        log.exception("LLM call failed")
+        done = [c.name for c in call_log if not c.error]
+        reply = "I ran into an error reaching the language model and couldn't finish this request. " + (
+            f"Actions completed before the error: {', '.join(done)}." if done else "No actions were taken."
+        )
+    return reply, call_log
+
+
+def _run(messages: list[ChatMessage], call_log: list[ToolCallLog]) -> str:
     started = time.perf_counter()
     if ROUTING_MODE == "all":
         active = sorted(tools.all_specs())
@@ -57,7 +72,6 @@ def run_chat(messages: list[ChatMessage]) -> tuple[str, list[ToolCallLog]]:
     log.info("executor sees %d tools: %s", len(active), active if use_meta else "ALL")
 
     input_items = _to_input(messages)
-    call_log: list[ToolCallLog] = []
     seen: dict[str, str] = {}  # identical successful call → cached model output
     usage = {"input": 0, "output": 0, "cached": 0}
 
@@ -140,4 +154,4 @@ def run_chat(messages: list[ChatMessage]) -> tuple[str, list[ToolCallLog]]:
         usage["cached"],
         usage["output"],
     )
-    return reply or "Sorry, I wasn't able to produce an answer.", call_log
+    return reply or "Sorry, I wasn't able to produce an answer."

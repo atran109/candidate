@@ -79,7 +79,7 @@ SERVICE_CORE: dict[str, list[str]] = {
     "gmail": ["GMAIL_FETCH_EMAILS"],
     "googlecalendar": ["GOOGLECALENDAR_EVENTS_LIST"],
     "googledrive": ["GOOGLEDRIVE_FIND_FILE"],
-    "slack": ["slack_list_conversations"],
+    "slack": ["slack_list_conversations", "slack_conversations_history"],
     "linear": ["linear_list_issues", "linear_list_projects", "linear_list_teams"],
     "github": ["github_search_issues", "github_list_pull_requests"],
 }

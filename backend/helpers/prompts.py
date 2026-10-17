@@ -21,7 +21,7 @@ def _workspace_now() -> datetime:
 # Tool-usage quirks per service, injected only for services the router picked,
 # so the prompt stays short and relevant.
 SERVICE_NOTES: dict[str, str] = {
-    "slack": "Slack: channel arguments need the channel ID (e.g. C001), not the name — get it from slack_list_conversations.",
+    "slack": "Slack: channel arguments need the channel ID (e.g. C001), not the name — get it from slack_list_conversations. To read what's recent in a channel or DM, use slack_conversations_history (search is for keywords across channels).",
     "linear": "Linear: team, state, assignee, and project arguments accept plain names (e.g. team \"Engineering\", state \"In Progress\") — pass names directly instead of looking up IDs. Issue IDs look like ENG-4. Priority is numeric: 1=Urgent, 2=High, 3=Medium, 4=Low, 0=None.",
     "googlecalendar": "Calendar: attendees must be email addresses — resolve people's names to emails first (contacts, Linear/Slack users). Use the primary calendar unless told otherwise. Pass start_datetime in local time (YYYY-MM-DDTHH:MM:SS).",
     "gmail": "Gmail: there is no send-new-email tool; reply to a thread with GMAIL_REPLY_TO_THREAD or create a draft. Gmail query supports from:, to:, subject:, label:, and plain keywords.",
