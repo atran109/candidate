@@ -48,7 +48,7 @@ COMPANIONS: dict[str, list[str]] = {
     "GOOGLECALENDAR_CREATE_EVENT": ["GMAIL_GET_CONTACTS", "GOOGLECALENDAR_FIND_FREE_SLOTS"],
     "GOOGLECALENDAR_UPDATE_EVENT": ["GOOGLECALENDAR_FIND_EVENT"],
     "GOOGLECALENDAR_PATCH_EVENT": ["GOOGLECALENDAR_FIND_EVENT"],
-    "GOOGLECALENDAR_DELETE_EVENT": ["GOOGLECALENDAR_FIND_EVENT"],
+    "GOOGLECALENDAR_DELETE_EVENT": ["GOOGLECALENDAR_FIND_EVENT", "GOOGLECALENDAR_LIST_CALENDARS"],
     "GOOGLECALENDAR_REMOVE_ATTENDEE": ["GOOGLECALENDAR_FIND_EVENT"],
     "GOOGLECALENDAR_EVENTS_MOVE": ["GOOGLECALENDAR_FIND_EVENT", "GOOGLECALENDAR_LIST_CALENDARS"],
     "GMAIL_REPLY_TO_THREAD": ["GMAIL_FETCH_EMAILS"],
@@ -230,10 +230,31 @@ def select_tools(messages: list[ChatMessage]) -> list[str]:
 _WORD = re.compile(r"[a-z0-9]+")
 
 
+# User vocabulary → tool vocabulary for keyword search ("cancel my
+# appointment" should find GOOGLECALENDAR_DELETE_EVENT).
+_SYNONYMS = {
+    "cancel": {"delete"}, "remove": {"delete"}, "trash": {"delete"},
+    "appointment": {"event"}, "meeting": {"event"}, "schedule": {"create", "event"},
+    "book": {"create", "event"}, "reschedule": {"update", "event"},
+    "post": {"send", "message"}, "dm": {"send", "message"}, "message": {"send"},
+    "email": {"gmail", "message"}, "mail": {"gmail"}, "file": {"drive"},
+    "ticket": {"issue"}, "pr": {"pull", "request"},
+}
+
+
+_VERBS = {
+    "create", "delete", "send", "reply", "update", "patch", "list", "get",
+    "find", "search", "fetch", "move", "merge", "write", "add", "remove",
+    "download", "edit", "copy", "share", "star", "fork", "label", "trash",
+}
+_STOPWORDS = {"a", "an", "the", "to", "my", "in", "on", "of", "for", "and", "or", "by", "from", "with", "me", "i"}
+
+
 def _tokens(text: str) -> set[str]:
-    words = set(_WORD.findall(text.lower().replace("_", " ")))
+    words = set(_WORD.findall(text.lower().replace("_", " "))) - _STOPWORDS
     # crude stemming so "events"/"event", "issues"/"issue" match
-    return words | {w[:-1] for w in words if w.endswith("s") and len(w) > 3}
+    words |= {w[:-1] for w in words if w.endswith("s") and len(w) > 3}
+    return words | {syn for w in words for syn in _SYNONYMS.get(w, ())}
 
 
 def search_tools(query: str, exclude: list[str], limit: int = 6) -> list[tuple[str, str]]:
@@ -242,9 +263,12 @@ def search_tools(query: str, exclude: list[str], limit: int = 6) -> list[tuple[s
     for name, spec in tools.all_specs().items():
         if name in exclude:
             continue
-        name_hits = len(q & _tokens(name))
+        name_tokens = _tokens(name)
+        name_hits = len(q & name_tokens)
         desc_hits = len(q & _tokens(spec.description))
-        score = 2 * name_hits + desc_hits
+        # The action verb is the most discriminating word ("reply" vs "email").
+        verb_hits = len(q & name_tokens & _VERBS)
+        score = 2 * name_hits + desc_hits + 3 * verb_hits
         if score:
             scored.append((score, name, spec.description))
     scored.sort(key=lambda t: (-t[0], t[1]))

@@ -155,6 +155,9 @@ def _run(messages: list[ChatMessage], call_log: list[ToolCallLog]) -> str:
             if c.name == router.SEARCH_TOOLS_NAME:
                 found = router.search_tools(args.get("query") or "", exclude=active)
                 active = active + [name for name, _ in found]
+                # Internal routing helper, not a registered tool: kept out of
+                # tool_calls but logged so routing misses stay visible.
+                log.info("search_tools %r -> %s", args.get("query"), [n for n, _ in found])
                 outputs[c.call_id] = json.dumps(
                     {"added_tools": [f"{n}: {d}" for n, d in found]}
                 )

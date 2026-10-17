@@ -64,23 +64,33 @@ def review(
 ) -> str | None:
     """Return None to proceed, or a clarifying question to ask the user.
 
-    Fails open: if the check itself errors, the write proceeds (the executor's
-    own prompt rules still apply).
+    Only an exact PROCEED approves; anything else malformed is retried once.
+    If the check is still unavailable it fails open (see note at the end).
     """
     started = time.perf_counter()
-    try:
-        resp = _openai().responses.create(
-            model=ROUTER_MODEL,
-            instructions=GATE_INSTRUCTIONS,
-            input=_render(messages, lookups, proposed),
-            temperature=0,
-            max_output_tokens=150,
-        )
-        verdict = resp.output_text.strip()
-    except Exception:
-        log.exception("write gate failed; proceeding")
-        return None
-    log.info("write gate %.0fms: %s", (time.perf_counter() - started) * 1000, verdict[:120])
-    if verdict.upper().startswith("ASK"):
-        return verdict.split(":", 1)[1].strip() if ":" in verdict else verdict
+    prompt = _render(messages, lookups, proposed)
+    for attempt in range(2):
+        try:
+            resp = _openai().responses.create(
+                model=ROUTER_MODEL,
+                instructions=GATE_INSTRUCTIONS,
+                input=prompt,
+                temperature=0,
+                max_output_tokens=150,
+            )
+            verdict = resp.output_text.strip()
+        except Exception:
+            log.exception("write gate call failed (attempt %d)", attempt + 1)
+            continue
+        log.info("write gate %.0fms: %s", (time.perf_counter() - started) * 1000, verdict[:120])
+        if verdict.rstrip(".").upper() == "PROCEED":
+            return None
+        if verdict.upper().startswith("ASK"):
+            question = verdict[3:].lstrip(" :").strip()
+            return question or "Could you clarify which item you mean?"
+        log.warning("write gate gave a malformed verdict; retrying: %r", verdict[:120])
+    # Deliberately fail open: blocking legitimate writes on a transient
+    # outage is worse here than the residual risk, since the executor's own
+    # prompt rules already forbid acting on ambiguous or invented targets.
+    log.warning("write gate unavailable or malformed twice; proceeding")
     return None

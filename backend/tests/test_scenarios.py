@@ -52,6 +52,18 @@ def _as_list(x: Any) -> list:
     return list(x.values()) if isinstance(x, dict) else list(x)
 
 
+def _draft_headers(state: State) -> list[dict[str, str]]:
+    out = []
+    for d in _as_list(state["gmail"]["drafts"]):
+        headers = d.get("message", {}).get("payload", {}).get("headers", [])
+        out.append({h["name"].lower(): h["value"] for h in headers})
+    return out
+
+
+def _new_issue(state: State) -> dict:
+    return _linear_issues(state)[-1]
+
+
 @dataclass
 class Scenario:
     id: str
@@ -60,7 +72,7 @@ class Scenario:
     # any one of these groups must be satisfied (e.g. list vs search variants)
     required_any: list[list[str]] = field(default_factory=list)
     forbidden: list[str] = field(default_factory=list)
-    min_calls: int = 0
+    min_calls: int = 0  # informational (grader tracks but doesn't grade efficiency)
     state_check: Callable[[State], bool] | None = None
     reply_contains: list[str] = field(default_factory=list)
     expect_question: bool = False  # ambiguous prompt → should ask, not act
@@ -143,7 +155,8 @@ SCENARIOS: list[Scenario] = [
         ),
         required=["GMAIL_FETCH_EMAILS", "slack_send_message"],
         min_calls=2,
-        state_check=lambda s: len(_slack_texts(s, "C001")) == 5,
+        state_check=lambda s: len(_slack_texts(s, "C001")) == 5
+        and "revenue" in _slack_texts(s, "C001")[-1].lower(),
     ),
     Scenario(
         "s09_perplexity_to_linear",
@@ -153,7 +166,9 @@ SCENARIOS: list[Scenario] = [
         ),
         required=["perplexity_search", "linear_create_issue"],
         min_calls=2,
-        state_check=lambda s: len(_linear_issues(s)) == 8,
+        state_check=lambda s: len(_linear_issues(s)) == 8
+        and _new_issue(s)["team"] == "team_eng"
+        and any(k in (_new_issue(s).get("description") or "").lower() for k in ("r&d", "%", "benchmark")),
     ),
     Scenario(
         "s10_slack_dm_to_calendar",
@@ -193,7 +208,9 @@ SCENARIOS: list[Scenario] = [
         ),
         required=["GMAIL_REPLY_TO_THREAD"],
         min_calls=2,
-        state_check=lambda s: len(_as_list(s["gmail"]["messages"])) == 7,
+        state_check=lambda s: len(_as_list(s["gmail"]["messages"])) == 7
+        and _as_list(s["gmail"]["messages"])[-1].get("threadId") == "thr_003"
+        and "friday" in (_as_list(s["gmail"]["messages"])[-1].get("snippet") or "").lower(),
     ),
     Scenario(
         "s13_linear_update_status",
@@ -207,7 +224,8 @@ SCENARIOS: list[Scenario] = [
         required=["GMAIL_CREATE_EMAIL_DRAFT"],
         forbidden=["GMAIL_REPLY_TO_THREAD"],
         min_calls=1,
-        state_check=lambda s: len(_as_list(s["gmail"]["drafts"])) == 2,
+        state_check=lambda s: len(_as_list(s["gmail"]["drafts"])) == 2
+        and _draft_headers(s)[-1].get("to") == "recruiting@corp.com",
     ),
     # --- ambiguity: should ask, not act -----------------------------------
     Scenario(
@@ -286,7 +304,8 @@ SCENARIOS: list[Scenario] = [
         user("DM Morgan on Slack that the board summary looks good."),
         required=["slack_send_message"],
         min_calls=2,
-        state_check=lambda s: len(_slack_texts(s, "D001")) == 2,
+        state_check=lambda s: len(_slack_texts(s, "D001")) == 2
+        and "board summary" in _slack_texts(s, "D001")[-1].lower(),
     ),
     Scenario(
         "s24_web_search_only",
@@ -367,7 +386,7 @@ class ScenarioTests(unittest.TestCase):
         ):
             failures.append(f"missing one of: {sc.required_any}")
         for name in sc.forbidden:
-            if name in ok_names:
+            if name in names:  # an attempt counts, even if the tool errored
                 failures.append(f"called forbidden tool: {name}")
         if sc.state_check:
             state = {k: _dump(v) for k, v in self.client.get("/state").json().items()}

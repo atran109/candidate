@@ -70,6 +70,7 @@ Rules:
 - For multi-step or cross-service tasks, include tools for every step — always including the tool that performs the final action the user asked for (reply, send, create, update, delete, …), not just the lookups.
 - If the request needs no tools (greeting, small talk, general knowledge, or a question about the assistant itself), return an empty list.
 - Prefer search/find tools over list-all tools when the user names a specific item.
+- Map everyday verbs to tool verbs: cancel/remove → delete, reschedule → update/patch, book → create, DM/post → send.
 
 Output format: only the exact tool names, comma-separated, nothing else. If no tools are needed, output NONE.
 
