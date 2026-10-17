@@ -22,10 +22,10 @@ def _workspace_now() -> datetime:
 # so the prompt stays short and relevant.
 SERVICE_NOTES: dict[str, str] = {
     "slack": "Slack: channel arguments need the channel ID (e.g. C001), not the name — get it from slack_list_conversations. To read what's recent in a channel or DM, use slack_conversations_history (search is for keywords across channels).",
-    "linear": "Linear: team, state, assignee, and project arguments accept plain names (e.g. team \"Engineering\", state \"In Progress\") — pass names directly instead of looking up IDs. Issue IDs look like ENG-4. Priority is numeric: 1=Urgent, 2=High, 3=Medium, 4=Low, 0=None.",
-    "googlecalendar": "Calendar: attendees must be email addresses — resolve people's names to emails first (contacts, Linear/Slack users). Use the primary calendar unless told otherwise. Pass start_datetime in local time (YYYY-MM-DDTHH:MM:SS).",
+    "linear": "Linear: team, state, assignee, and project arguments accept plain names (e.g. team \"Engineering\", state \"In Progress\") — pass names directly instead of looking up IDs. Issue IDs look like ENG-4. Priority is numeric: 1=Urgent, 2=High, 3=Medium, 4=Low, 0=None. Project states are backlog/planned/started/paused/completed/canceled (\"in progress\" = started).",
+    "googlecalendar": "Calendar: attendees must be email addresses — resolve people's names to emails first (contacts, Linear/Slack users). Create on the primary calendar unless told otherwise. The user has several calendars (GOOGLECALENDAR_LIST_CALENDARS); event searches cover one calendar at a time, so to find an existing event by name: search primary, and if it isn't there, list calendars and search the others in parallel. Pass start_datetime in local time (YYYY-MM-DDTHH:MM:SS).",
     "gmail": "Gmail: there is no send-new-email tool; reply to a thread with GMAIL_REPLY_TO_THREAD or create a draft. Gmail query supports from:, to:, subject:, label:, and plain keywords.",
-    "googledrive": "Drive: there is no tool to trash or delete a single file. GOOGLEDRIVE_EMPTY_TRASH permanently deletes everything already in trash — never use it to delete a specific file.",
+    "googledrive": "Drive: files can live in shared drives — always search with includeItemsFromAllDrives=true and supportsAllDrives=true. Results can include trashed files (trashed: true). There is no tool to trash or delete a single file. GOOGLEDRIVE_EMPTY_TRASH permanently deletes everything already in trash — never use it to delete a specific file.",
     "github": "GitHub: identify repos as owner + repo (e.g. instalily/orchestrator). If an issue/PR title matches in several repos and the user didn't name one, ask which repo.",
 }
 
@@ -61,7 +61,7 @@ Service notes:
 Final reply: concise and direct. State what you found or did, with key specifics (names, times, IDs/links when useful). If you asked a question, end with it."""
 
 
-ROUTER_INSTRUCTIONS = """You select tools for an assistant that operates Gmail, Google Calendar, Google Drive, Slack, Linear, GitHub, and Perplexity (web search).
+ROUTER_INSTRUCTIONS = """You are a tool selector, not a chat assistant: never answer or question the user. You select tools for an assistant that operates Gmail, Google Calendar, Google Drive, Slack, Linear, GitHub, and Perplexity (web search).
 
 Given the conversation, choose the tools the assistant will need for the user's latest request — including lookup tools needed before a write (e.g. finding a channel, file, thread, person, team, or issue first). Consider earlier turns: a short follow-up ("yes", "the second one", "Tool Orchestrator") continues the earlier task.
 
@@ -70,6 +70,8 @@ Rules:
 - For multi-step or cross-service tasks, include tools for every step.
 - If the request needs no tools (greeting, small talk, general knowledge, or a question about the assistant itself), return an empty list.
 - Prefer search/find tools over list-all tools when the user names a specific item.
+
+Output format: only the exact tool names, comma-separated, nothing else. If no tools are needed, output NONE.
 
 Tool catalog (name: description), grouped by service:
 """

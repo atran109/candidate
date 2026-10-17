@@ -92,13 +92,41 @@ def execute_batch(calls: list[tuple[str, dict[str, Any]]]) -> list[ToolCallLog]:
     return [execute(name, args) for name, args in calls]
 
 
+EMPTY_RESULT_HINT = (
+    "[0 results. Before concluding it doesn't exist, retry once broader: "
+    "fewer filters / plain keywords, or list and scan.{extra}]"
+)
+# Where "broader" isn't obvious from the tool itself.
+_EMPTY_HINT_BY_SERVICE = {
+    "googlecalendar": " NOTE: this searched a single calendar. If you haven't "
+    "yet, call GOOGLECALENDAR_LIST_CALENDARS next and search the user's other "
+    "calendars (in parallel) before saying it doesn't exist.",
+    "googledrive": " Files may be in shared drives: use includeItemsFromAllDrives=true.",
+}
+
+
+def _is_empty_listing(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    lists = [v for v in result.values() if isinstance(v, list)]
+    return bool(lists) and all(len(v) == 0 for v in lists)
+
+
 def output_for_model(entry: ToolCallLog) -> str:
-    """Serialize a tool result for the model, truncating very large payloads."""
+    """Serialize a tool result for the model, truncating very large payloads.
+
+    Empty listings get a nudge to broaden the search once: models otherwise
+    tend to report "not found" after a single over-filtered query.
+    """
     if entry.error:
         payload: Any = {"error": entry.error}
     else:
         payload = entry.result
     text = json.dumps(payload, default=str, separators=(",", ":"))
+    if not entry.error and _is_empty_listing(entry.result):
+        spec = all_specs().get(entry.name)
+        extra = _EMPTY_HINT_BY_SERVICE.get(spec.service, "") if spec else ""
+        return text + " " + EMPTY_RESULT_HINT.format(extra=extra)
     if len(text) > TOOL_OUTPUT_CHAR_LIMIT:
         text = (
             text[:TOOL_OUTPUT_CHAR_LIMIT]

@@ -11,11 +11,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import time
 from collections import defaultdict
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from functools import lru_cache
 from typing import Any
 
@@ -77,7 +77,7 @@ COMPANIONS: dict[str, list[str]] = {
 # executor can always resolve names / broaden a search within that service.
 SERVICE_CORE: dict[str, list[str]] = {
     "gmail": ["GMAIL_FETCH_EMAILS"],
-    "googlecalendar": ["GOOGLECALENDAR_EVENTS_LIST"],
+    "googlecalendar": ["GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_LIST_CALENDARS"],
     "googledrive": ["GOOGLEDRIVE_FIND_FILE"],
     "slack": ["slack_list_conversations", "slack_conversations_history"],
     "linear": ["linear_list_issues", "linear_list_projects", "linear_list_teams"],
@@ -108,7 +108,7 @@ _client: OpenAI | None = None
 def _openai() -> OpenAI:
     global _client
     if _client is None:
-        _client = OpenAI(timeout=10, max_retries=1)
+        _client = OpenAI(timeout=ROUTER_DEADLINE_S, max_retries=0)
     return _client
 
 
@@ -122,26 +122,6 @@ def catalog_text() -> str:
         for svc, lines in by_service.items()
     ]
     return ROUTER_INSTRUCTIONS + "\n\n".join(sections)
-
-
-@lru_cache(maxsize=1)
-def _route_format() -> dict[str, Any]:
-    return {
-        "type": "json_schema",
-        "name": "tool_selection",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "tools": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": sorted(tools.all_specs())},
-                }
-            },
-            "required": ["tools"],
-            "additionalProperties": False,
-        },
-    }
 
 
 def _router_input(messages: list[ChatMessage]) -> list[dict[str, str]]:
@@ -161,23 +141,70 @@ def expand_companions(selected: list[str]) -> list[str]:
     return out
 
 
+_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]+")
+HEDGE_AFTER_S = 2.5  # fire a duplicate request if the first is this slow
+ROUTER_DEADLINE_S = 9.0
+
+
+def _ask_router(messages: list[ChatMessage]) -> list[str]:
+    # Plain-text output instead of a JSON-schema enum: gpt-4.1-mini's
+    # structured output occasionally emits runaway whitespace (hundreds of
+    # junk tokens → multi-second stalls). Names are validated below anyway.
+    resp = _openai().responses.create(
+        model=ROUTER_MODEL,
+        instructions=catalog_text(),
+        input=_router_input(messages),
+        temperature=0,
+        max_output_tokens=200,
+    )
+    specs = tools.all_specs()
+    text = resp.output_text.strip()
+    names = [n for n in dict.fromkeys(_NAME.findall(text)) if n in specs]
+    if not names and text.upper() != "NONE":
+        # Model replied conversationally instead of selecting: treat as a miss.
+        raise ValueError(f"router returned no tool names: {text[:120]!r}")
+    return names
+
+
+def _hedged(messages: list[ChatMessage]) -> list[str]:
+    """Tail-latency hedge: if the first router call is slow, race a second."""
+    pool = ThreadPoolExecutor(max_workers=2)
+    try:
+        futures = [pool.submit(_ask_router, messages)]
+        done, _ = wait(futures, timeout=HEDGE_AFTER_S)
+        if not done:
+            log.info("router slow; hedging with a second request")
+            futures.append(pool.submit(_ask_router, messages))
+        remaining = ROUTER_DEADLINE_S - HEDGE_AFTER_S
+        while remaining > 0:
+            t0 = time.perf_counter()
+            done, pending = wait(futures, timeout=remaining, return_when=FIRST_COMPLETED)
+            for f in done:
+                if f.exception() is None:
+                    return f.result()
+            futures = list(pending)
+            if not futures:
+                break
+            remaining -= time.perf_counter() - t0
+        raise TimeoutError("router did not answer in time")
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _fallback(messages: list[ChatMessage]) -> list[str]:
+    last_user = next((m.content for m in reversed(messages) if m.role == "user"), "")
+    return [name for name, _ in search_tools(last_user, exclude=[], limit=8)]
+
+
 def select_tools(messages: list[ChatMessage]) -> list[str]:
     started = time.perf_counter()
     try:
-        resp = _openai().responses.create(
-            model=ROUTER_MODEL,
-            instructions=catalog_text(),
-            input=_router_input(messages),
-            text={"format": _route_format()},
-            temperature=0,
-        )
-        picked = json.loads(resp.output_text)["tools"]
+        picked = _hedged(messages)
     except Exception:
-        # Router failure shouldn't fail the request: the executor still has
-        # search_tools to find what it needs.
-        log.exception("router failed; falling back to search_tools only")
-        return []
-    picked = [n for n in dict.fromkeys(picked) if n in tools.all_specs()]
+        # Router failure shouldn't fail the request: seed tools by keyword
+        # match on the user's message; search_tools remains available too.
+        log.exception("router failed; using keyword fallback")
+        picked = _fallback(messages)
     picked = picked[:MAX_ROUTED_TOOLS]
     expanded = expand_companions(picked)
     log.info(

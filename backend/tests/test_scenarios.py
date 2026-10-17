@@ -260,6 +260,77 @@ SCENARIOS: list[Scenario] = [
             for e in _calendar_events(s)
         ),
     ),
+    # --- coverage for remaining services / verbs ---------------------------
+    Scenario(
+        "s20_drive_read_file",
+        user("What does the Launch Brief in my Drive say?"),
+        required=["GOOGLEDRIVE_FIND_FILE"],
+        min_calls=2,
+    ),
+    Scenario(
+        "s21_github_notifications",
+        user("Do I have any GitHub notifications?"),
+        required=["github_list_notifications"],
+        min_calls=1,
+        reply_contains=["review"],
+    ),
+    Scenario(
+        "s22_linear_projects",
+        user("Which Linear projects are currently in progress?"),
+        required_any=[["linear_list_projects"]],
+        min_calls=1,
+        reply_contains=["Tool Orchestrator", "Renewals Risk"],
+    ),
+    Scenario(
+        "s23_slack_dm",
+        user("DM Morgan on Slack that the board summary looks good."),
+        required=["slack_send_message"],
+        min_calls=2,
+        state_check=lambda s: len(_slack_texts(s, "D001")) == 2,
+    ),
+    Scenario(
+        "s24_web_search_only",
+        user("Search the web for common causes of launch delays at SaaS companies."),
+        required=["perplexity_search"],
+        forbidden=WRITE_TOOLS,
+        min_calls=1,
+    ),
+    Scenario(
+        "s25_cancel_event",
+        user("Cancel my dentist appointment."),
+        required=["GOOGLECALENDAR_DELETE_EVENT"],
+        min_calls=2,
+        state_check=lambda s: all(
+            e["id"] != "evt_201" or e.get("status") == "cancelled"
+            for e in _calendar_events(s, "personal-projects@group.calendar.google.com")
+        ),
+    ),
+    Scenario(
+        "s26_github_create_issue",
+        user(
+            "Open an issue in instalily/web-frontend titled 'Fix login redirect loop'."
+        ),
+        required=["github_issue_write"],
+        min_calls=1,
+        state_check=lambda s: any(
+            i.get("title") == "Fix login redirect loop"
+            for r in s["github"]["repos"]
+            if r.get("full_name") == "instalily/web-frontend"
+            for i in r["issues"]
+        ),
+    ),
+    Scenario(
+        "s27_availability",
+        user("Am I free Thursday at 10am?"),
+        required_any=[
+            ["GOOGLECALENDAR_EVENTS_LIST"],
+            ["GOOGLECALENDAR_FIND_FREE_SLOTS"],
+            ["GOOGLECALENDAR_FREE_BUSY_QUERY"],
+            ["GOOGLECALENDAR_FIND_EVENT"],
+        ],
+        min_calls=1,
+        reply_contains=["not"],  # busy 9-11 with "Deep work block"
+    ),
 ]
 
 
