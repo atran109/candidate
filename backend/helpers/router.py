@@ -73,14 +73,25 @@ COMPANIONS: dict[str, list[str]] = {
     "github_update_pull_request": ["github_list_pull_requests"],
 }
 
-# Cheap discovery tools added whenever the router touches a service, so the
-# executor can always resolve names / broaden a search within that service.
+# Added whenever the router touches a service: cheap discovery tools (resolve
+# names / broaden a search) plus the service's most common write, which the
+# router occasionally drops when it focuses on the lookup step.
 SERVICE_CORE: dict[str, list[str]] = {
-    "gmail": ["GMAIL_FETCH_EMAILS"],
-    "googlecalendar": ["GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_LIST_CALENDARS"],
+    "gmail": ["GMAIL_FETCH_EMAILS", "GMAIL_REPLY_TO_THREAD", "GMAIL_CREATE_EMAIL_DRAFT"],
+    "googlecalendar": [
+        "GOOGLECALENDAR_EVENTS_LIST",
+        "GOOGLECALENDAR_LIST_CALENDARS",
+        "GOOGLECALENDAR_CREATE_EVENT",
+    ],
     "googledrive": ["GOOGLEDRIVE_FIND_FILE"],
-    "slack": ["slack_list_conversations", "slack_conversations_history"],
-    "linear": ["linear_list_issues", "linear_list_projects", "linear_list_teams"],
+    "slack": ["slack_list_conversations", "slack_conversations_history", "slack_send_message"],
+    "linear": [
+        "linear_list_issues",
+        "linear_list_projects",
+        "linear_list_teams",
+        "linear_create_issue",
+        "linear_update_issue",
+    ],
     "github": ["github_search_issues", "github_list_pull_requests"],
 }
 

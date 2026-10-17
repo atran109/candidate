@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -11,7 +12,7 @@ from openai import OpenAI, OpenAIError
 
 from backend.chat_schema import ChatMessage, ToolCallLog
 
-from . import router, tools
+from . import router, tools, write_gate
 from .config import AGENT_MODEL, MAX_ITERATIONS, ROUTING_MODE, WRITE_GATE
 from .prompts import agent_instructions
 
@@ -19,16 +20,31 @@ log = logging.getLogger("chat.agent")
 
 _client: OpenAI | None = None
 
-WRITE_GATE_MESSAGE = (
-    "[Write check — not executed yet.] Before changing anything, verify: "
-    "(1) every target, recipient, and value comes from the user's words or a "
-    "tool result (nothing invented); (2) if the user referred to something "
-    "unspecified (\"the project\", \"the meeting\") or several items matched, "
-    "the user chose which one — you didn't pick. If both hold (the usual case "
-    "for an explicit request), immediately call the same tool again with the "
-    "same arguments — do not reply with text first. Only if one fails: don't "
-    "write; ask the user one concise question instead."
+# Final text that announces an action instead of doing it ("I will reply…").
+_INTENT = re.compile(
+    r"\b(I will|I'll|I am going to|I'm going to|Let me|I can now"
+    r"|(do not|don't) have the ability|tools do not allow|not able to (send|reply|create))\b",
+    re.I,
 )
+FOLLOW_THROUGH_NUDGE = (
+    "You described an action but didn't perform it. If the user asked for it, "
+    "do it now with a tool call — if no current tool fits, call search_tools "
+    "first. Otherwise, give your final answer."
+)
+
+
+# Offers and pleasantries ("let me know…", "if you'd like, I'll…") aren't stalls.
+_OFFER = re.compile(r"\b(if|let me know|would you like|want|need)\b", re.I)
+_SENTENCE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _announces_action(text: str) -> bool:
+    if text.rstrip().endswith("?"):
+        return False
+    return any(
+        _INTENT.search(sentence) and not _OFFER.search(sentence)
+        for sentence in _SENTENCE.split(text)
+    )
 
 
 def _openai() -> OpenAI:
@@ -111,12 +127,19 @@ def _run(messages: list[ChatMessage], call_log: list[ToolCallLog]) -> str:
 
     reply = ""
     gate_passed = not WRITE_GATE
+    nudged = False
     for iteration in range(MAX_ITERATIONS):
-        held_writes = False
         resp = create()
         calls = [o for o in resp.output if o.type == "function_call"]
         if not calls:
             reply = resp.output_text
+            if not nudged and _announces_action(reply):
+                # Model narrated a next step and stopped; push it to follow through once.
+                nudged = True
+                log.info("follow-through nudge: %s", reply[:100])
+                input_items.append({"role": "assistant", "content": reply})
+                input_items.append({"role": "developer", "content": FOLLOW_THROUGH_NUDGE})
+                continue
             break
 
         input_items.extend(o.model_dump(exclude_none=True) for o in resp.output)
@@ -140,15 +163,16 @@ def _run(messages: list[ChatMessage], call_log: list[ToolCallLog]) -> str:
             if key in seen:
                 outputs[c.call_id] = seen[key]
                 continue
-            if not gate_passed and not tools.is_read_only(c.name):
-                # Hold the first write of the request for a self-check (not
-                # executed, so not logged). Same call re-issued ⇒ it runs.
-                outputs[c.call_id] = WRITE_GATE_MESSAGE
-                held_writes = True
-                continue
             to_run.append((c.call_id, c.name, args))
-        if held_writes:
+
+        writes = [(name, args) for _, name, args in to_run if not tools.is_read_only(name)]
+        if writes and not gate_passed:
             gate_passed = True
+            question = write_gate.review(messages, call_log, writes)
+            if question:
+                # Ambiguous target: nothing is written; ask the user instead.
+                reply = question
+                break
 
         results = tools.execute_batch([(name, args) for _, name, args in to_run])
         for (call_id, name, args), entry in zip(to_run, results):
